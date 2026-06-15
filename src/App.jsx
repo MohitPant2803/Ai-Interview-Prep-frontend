@@ -353,7 +353,7 @@ export default function App() {
   const [cumulativeReport, setCumulativeReport] = useState(null);
   
   // Navigation & Identity
-  const [step, setStep] = useState(STEPS.LOGIN);
+  const [step, setStep] = useState(localStorage.getItem('auth_token') ? STEPS.LOGIN : STEPS.DASHBOARD);
   const [name, setName] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [selectedProfile, setSelectedProfile] = useState(PROFILES[0]);
@@ -365,6 +365,7 @@ export default function App() {
   const [dashboardTab, setDashboardTab] = useState('cumulative'); // 'cumulative' | 'history' | 'profile' | 'adaptive'
   const [activeHistoryReport, setActiveHistoryReport] = useState(null);
   const [showCvModal, setShowCvModal] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(false);
   const [tempCvText, setTempCvText] = useState('');
   
   // Adaptive Prep States
@@ -423,7 +424,7 @@ export default function App() {
     if (token) {
       loadUserProfile();
     } else {
-      setStep(STEPS.LOGIN);
+      setStep(STEPS.DASHBOARD);
     }
   }, [token]);
 
@@ -454,22 +455,26 @@ export default function App() {
     setUser(null);
     setReportsHistory([]);
     setCumulativeReport(null);
-    setStep(STEPS.LOGIN);
+    setStep(STEPS.DASHBOARD);
   };
 
   // Google Identity Services OAuth callback initialization
   useEffect(() => {
-    if (step === STEPS.LOGIN) {
+    if (step === STEPS.LOGIN || showLoginModal) {
       const initGsi = () => {
         if (window.google) {
           window.google.accounts.id.initialize({
             client_id: GOOGLE_CLIENT_ID,
             callback: handleGoogleCredentialResponse,
           });
-          window.google.accounts.id.renderButton(
-            document.getElementById('google-signin-btn'),
-            { theme: 'outline', size: 'large', width: 280 }
-          );
+          const containerId = showLoginModal ? 'google-signin-btn-modal' : 'google-signin-btn';
+          const targetEl = document.getElementById(containerId);
+          if (targetEl) {
+            window.google.accounts.id.renderButton(
+              targetEl,
+              { theme: 'outline', size: 'large', width: 280 }
+            );
+          }
         }
       };
 
@@ -485,7 +490,7 @@ export default function App() {
         return () => clearInterval(interval);
       }
     }
-  }, [step]);
+  }, [step, showLoginModal]);
 
   const handleGoogleCredentialResponse = async (response) => {
     try {
@@ -494,6 +499,7 @@ export default function App() {
       const authResult = await apiRequest('/api/auth/google', 'POST', { credential: response.credential });
       localStorage.setItem('auth_token', authResult.token);
       setToken(authResult.token);
+      setShowLoginModal(false);
     } catch (err) {
       console.error('Google Sign-In Error:', err);
       setApiError(err.message || 'Google Authentication failed. Please try again.');
@@ -502,6 +508,11 @@ export default function App() {
   };
 
   const handleSaveProfile = async () => {
+    if (!token) {
+      alert("Please log in to save your API Key and Resume permanently to your profile.");
+      setShowLoginModal(true);
+      return;
+    }
     setIsApiValidating(true);
     setApiError('');
     try {
@@ -529,6 +540,11 @@ export default function App() {
 
   // Start interview click showing CV Confirmation modal
   const handleStartInterviewClick = () => {
+    if (!token) {
+      alert("Please log in to start a mock interview round and save your feedback reports.");
+      setShowLoginModal(true);
+      return;
+    }
     if (!apiKey || apiKey.trim() === '') {
       alert("Please enter and save your Gemini API Key in Profile Settings before starting an interview.");
       setDashboardTab('profile');
@@ -831,25 +847,27 @@ export default function App() {
           setReport(resultReport);
 
           // SAVE REPORT TO BACKEND (Triggers Standard/Cumulative report generation on Express)
-          const saveResult = await apiRequest('/api/reports', 'POST', {
-            reportData: {
-              role: selectedProfile.name,
-              overallScore: resultReport.overallScore,
-              metrics: resultReport.metrics,
-              executiveSummary: resultReport.executiveSummary,
-              methodology: resultReport.methodology,
-              keyFindings: resultReport.keyFindings,
-              detailedFeedback: resultReport.detailedFeedback,
-              insightsPatterns: resultReport.insightsPatterns,
-              recommendations: resultReport.recommendations,
-              limitations: resultReport.limitations,
-              conclusion: resultReport.conclusion,
-              chatHistory: updatedHistory
-            }
-          }, token);
+          if (token) {
+            const saveResult = await apiRequest('/api/reports', 'POST', {
+              reportData: {
+                role: selectedProfile.name,
+                overallScore: resultReport.overallScore,
+                metrics: resultReport.metrics,
+                executiveSummary: resultReport.executiveSummary,
+                methodology: resultReport.methodology,
+                keyFindings: resultReport.keyFindings,
+                detailedFeedback: resultReport.detailedFeedback,
+                insightsPatterns: resultReport.insightsPatterns,
+                recommendations: resultReport.recommendations,
+                limitations: resultReport.limitations,
+                conclusion: resultReport.conclusion,
+                chatHistory: updatedHistory
+              }
+            }, token);
 
-          setReportsHistory(saveResult.reports || []);
-          setCumulativeReport(saveResult.cumulativeReport || null);
+            setReportsHistory(saveResult.reports || []);
+            setCumulativeReport(saveResult.cumulativeReport || null);
+          }
         } catch (error) {
           console.error(error);
         } finally {
@@ -938,25 +956,27 @@ Do not include any introductory remarks, metadata, or choices. Return ONLY the f
           setReport(resultReport);
 
           // SAVE REPORT TO BACKEND
-          const saveResult = await apiRequest('/api/reports', 'POST', {
-            reportData: {
-              role: selectedProfile.name,
-              overallScore: resultReport.overallScore,
-              metrics: resultReport.metrics,
-              executiveSummary: resultReport.executiveSummary,
-              methodology: resultReport.methodology,
-              keyFindings: resultReport.keyFindings,
-              detailedFeedback: resultReport.detailedFeedback,
-              insightsPatterns: resultReport.insightsPatterns,
-              recommendations: resultReport.recommendations,
-              limitations: resultReport.limitations,
-              conclusion: resultReport.conclusion,
-              chatHistory: updatedHistory
-            }
-          }, token);
+          if (token) {
+            const saveResult = await apiRequest('/api/reports', 'POST', {
+              reportData: {
+                role: selectedProfile.name,
+                overallScore: resultReport.overallScore,
+                metrics: resultReport.metrics,
+                executiveSummary: resultReport.executiveSummary,
+                methodology: resultReport.methodology,
+                keyFindings: resultReport.keyFindings,
+                detailedFeedback: resultReport.detailedFeedback,
+                insightsPatterns: resultReport.insightsPatterns,
+                recommendations: resultReport.recommendations,
+                limitations: resultReport.limitations,
+                conclusion: resultReport.conclusion,
+                chatHistory: updatedHistory
+              }
+            }, token);
 
-          setReportsHistory(saveResult.reports || []);
-          setCumulativeReport(saveResult.cumulativeReport || null);
+            setReportsHistory(saveResult.reports || []);
+            setCumulativeReport(saveResult.cumulativeReport || null);
+          }
         } catch (error) {
           console.error(error);
         } finally {
@@ -1233,6 +1253,20 @@ Do not include any introductory remarks, metadata, or multiple choices. Return O
 
   // Dashboard - Standard / Cumulative Report Tab
   const renderCumulativeReportTab = () => {
+    if (!token) {
+      return (
+        <div className="empty-state" style={{ textAlign: 'center', padding: '4rem 1.5rem' }}>
+          <h3>Standard Cumulative Report</h3>
+          <p style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', maxWidth: '480px', margin: '0.75rem auto 1.75rem auto', lineHeight: '1.6' }}>
+            Standard cumulative reports track your performance metrics across all interview rounds. Log in with your student community account to view details.
+          </p>
+          <button className="btn" onClick={() => setShowLoginModal(true)}>
+            Login to Account
+          </button>
+        </div>
+      );
+    }
+
     if (!cumulativeReport) {
       return (
         <div className="empty-state">
@@ -1365,6 +1399,20 @@ Do not include any introductory remarks, metadata, or multiple choices. Return O
 
   // Dashboard - Session History Tab
   const renderHistoryTab = () => {
+    if (!token) {
+      return (
+        <div className="empty-state" style={{ textAlign: 'center', padding: '4rem 1.5rem' }}>
+          <h3>Session History Logs</h3>
+          <p style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', maxWidth: '480px', margin: '0.75rem auto 1.75rem auto', lineHeight: '1.6' }}>
+            Access all your past McKinsey-grade mock interview transcripts and feedback reports in one place. Log in to sync history.
+          </p>
+          <button className="btn" onClick={() => setShowLoginModal(true)}>
+            Login to Account
+          </button>
+        </div>
+      );
+    }
+
     if (reportsHistory.length === 0) {
       return (
         <div className="empty-state">
@@ -1497,6 +1545,11 @@ Do not include any introductory remarks, metadata, or multiple choices. Return O
                 className="btn btn-secondary" 
                 style={{ width: '100%', fontSize: '0.85rem', padding: '0.65rem' }}
                 onClick={() => {
+                  if (!token) {
+                    alert("Please log in to practice adaptive modules and save your scoring history.");
+                    setShowLoginModal(true);
+                    return;
+                  }
                   setSelectedAdaptiveModuleForConfig(mod);
                   setShowAdaptiveModal(true);
                 }}
@@ -1520,6 +1573,7 @@ Do not include any introductory remarks, metadata, or multiple choices. Return O
         initialLength={interviewLength}
         initialCvText={customDetails}
         profiles={PROFILES}
+        isLoggedIn={!!token}
         onStart={handleStartInterviewClickWithOptions}
       />
     );
@@ -1539,8 +1593,44 @@ Do not include any introductory remarks, metadata, or multiple choices. Return O
         initialCvText={customDetails}
         profiles={PROFILES}
         isAdaptive={true}
+        isLoggedIn={!!token}
         onStart={handleStartAdaptiveClickWithOptions}
       />
+    );
+  };
+
+  // Google Sign-In Login Modal for Guests
+  const renderLoginModal = () => {
+    return (
+      <div className="modal-overlay">
+        <div className="modal-container" style={{ maxWidth: '420px', padding: '2.5rem 2rem', textAlign: 'center' }}>
+          <div className="modal-header" style={{ borderBottom: 'none', paddingBottom: 0, justifyContent: 'center', position: 'relative' }}>
+            <h3 className="modal-title" style={{ fontSize: '1.4rem' }}>Log in to KGP Interview Prep</h3>
+            <button className="modal-close-btn" style={{ position: 'absolute', right: 0, top: 0 }} onClick={() => setShowLoginModal(false)}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          
+          <div className="modal-body" style={{ marginTop: '1rem' }}>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', lineHeight: '1.5', marginBottom: '2rem' }}>
+              Authenticate with your student account to automatically save report history, track cumulative competency grids, and personalize conversational simulations.
+            </p>
+            
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1rem' }}>
+              <div id="google-signin-btn-modal"></div>
+            </div>
+
+            {apiError && (
+              <div className="error-message" style={{ justifyContent: 'center', marginTop: '1rem' }}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                <span>{apiError}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     );
   };
 
@@ -1781,9 +1871,15 @@ Do not include any introductory remarks, metadata, or multiple choices. Return O
               <span className="brand-sub">• Peer Prep Community</span>
             </div>
             
-            <button className="btn btn-secondary" style={{ padding: '0.5rem 1.25rem', fontSize: '0.85rem' }} onClick={handleLogout}>
-              Logout
-            </button>
+            {token ? (
+              <button className="btn btn-secondary" style={{ padding: '0.5rem 1.25rem', fontSize: '0.85rem' }} onClick={handleLogout}>
+                Logout
+              </button>
+            ) : (
+              <button className="btn btn-secondary" style={{ padding: '0.5rem 1.25rem', fontSize: '0.85rem' }} onClick={() => setShowLoginModal(true)}>
+                Login
+              </button>
+            )}
           </div>
         </header>
 
@@ -1856,6 +1952,7 @@ Do not include any introductory remarks, metadata, or multiple choices. Return O
 
           {showCvModal && renderCvModal()}
           {showAdaptiveModal && renderAdaptiveModal()}
+          {showLoginModal && renderLoginModal()}
           {activeHistoryReport && renderPastReportModal()}
         </main>
       </div>
