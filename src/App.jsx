@@ -378,6 +378,7 @@ export default function App() {
   
   // Interview Run States
   const [isApiValidating, setIsApiValidating] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
   const [apiError, setApiError] = useState('');
   const [isAILoading, setIsAILoading] = useState(false);
   const [isAISpeaking, setIsAISpeaking] = useState(false);
@@ -509,7 +510,6 @@ export default function App() {
 
   const handleSaveProfile = async () => {
     if (!token) {
-      alert("Please log in to save your API Key and Resume permanently to your profile.");
       setShowLoginModal(true);
       return;
     }
@@ -529,7 +529,8 @@ export default function App() {
       }, token);
 
       setUser(response.profile);
-      alert('Profile settings updated successfully!');
+      setSuccessMessage('Profile settings saved successfully!');
+      setTimeout(() => setSuccessMessage(''), 4000);
     } catch (err) {
       console.error(err);
       setApiError(err.message || 'Failed to update profile settings.');
@@ -541,13 +542,13 @@ export default function App() {
   // Start interview click showing CV Confirmation modal
   const handleStartInterviewClick = () => {
     if (!token) {
-      alert("Please log in to start a mock interview round and save your feedback reports.");
       setShowLoginModal(true);
       return;
     }
     if (!apiKey || apiKey.trim() === '') {
-      alert("Please enter and save your Gemini API Key in Profile Settings before starting an interview.");
       setDashboardTab('profile');
+      setApiError("Please enter and save your Gemini API Key in Profile Settings before starting an interview.");
+      setTimeout(() => setApiError(''), 6000);
       return;
     }
     setShowCvModal(true);
@@ -568,8 +569,7 @@ export default function App() {
         setUser(response.profile);
         setCustomDetails(modalCvText);
       } catch (err) {
-        console.error('Failed to save CV text to profile:', err);
-        alert('Could not save CV to profile permanently: ' + err.message + '. Starting session with temporary CV.');
+        console.warn('Could not save CV to profile permanently:', err);
       } finally {
         setIsApiValidating(false);
       }
@@ -1004,8 +1004,9 @@ Do not include any introductory remarks, metadata, or choices. Return ONLY the f
 
   const startAdaptiveSession = async (moduleItem, targetProfile, confirmedCvText) => {
     if (!apiKey || apiKey.trim() === '') {
-      alert("Please enter and save your Gemini API Key in Profile Settings before starting a session.");
       setDashboardTab('profile');
+      setApiError("Please enter and save your Gemini API Key in Profile Settings before starting a session.");
+      setTimeout(() => setApiError(''), 6000);
       return;
     }
     
@@ -1182,7 +1183,7 @@ Do not include any introductory remarks, metadata, or multiple choices. Return O
     } catch (err) {
       console.error("Error submitting adaptive response:", err);
       setIsAdaptiveStepLoading(false);
-      alert("Failed to analyze response. Returning to dashboard.");
+      setStep(STEPS.DASHBOARD);
       stopHardware();
       setStep(STEPS.DASHBOARD);
     }
@@ -1478,6 +1479,15 @@ Do not include any introductory remarks, metadata, or multiple choices. Return O
           </div>
         )}
 
+        {successMessage && (
+          <div className="success-message" style={{ marginBottom: '1.5rem', color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.85rem' }}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            <span>{successMessage}</span>
+          </div>
+        )}
+
         <div className="form-group">
           <label htmlFor="key-input">Gemini API Key</label>
           <input
@@ -1546,7 +1556,6 @@ Do not include any introductory remarks, metadata, or multiple choices. Return O
                 style={{ width: '100%', fontSize: '0.85rem', padding: '0.65rem' }}
                 onClick={() => {
                   if (!token) {
-                    alert("Please log in to practice adaptive modules and save your scoring history.");
                     setShowLoginModal(true);
                     return;
                   }
