@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { validateApiKey, generateQuestionsList, generateFeedbackReport, generateAdaptiveStepFeedback } from './utils/gemini';
+import { validateApiKey, generateQuestionsList, generateFeedbackReport, generateAdaptiveStepFeedback, generateAdaptiveStartQuestion } from './utils/gemini';
 
 // ==========================================
 // CONFIGURATION
@@ -1022,58 +1022,29 @@ Do not include any introductory remarks, metadata, or choices. Return ONLY the f
     // Promptly start webcam
     await startWebcam();
 
-    // Select the first question dynamically from CV text
-    let firstQuestion = "";
+    // Select the first question dynamically via Gemini
     const cvText = confirmedCvText || customDetails || "";
     const profileName = targetProfile?.name || selectedProfile?.name || "General Profile";
     
-    if (cvText.trim()) {
-      try {
-        const genAIPrompt = `You are a mock placement interviewer for a ${profileName} role.
-Given the candidate's CV/Resume text:
-"${cvText}"
-
-We are starting a behavioral/technical mock interview practice module focused on: "${moduleItem.title}" (${moduleItem.desc}).
-Generate exactly one customized starting question for this candidate. The question must:
-1. Directly relate to their CV details, projects, internships, leadership roles, or background if applicable.
-2. Be tailored to the ${profileName} context.
-3. If the module is personal (like Self Introduction, Strengths/Weaknesses, or Motivation), tie it to their background or their experiences at IIT Kharagpur.
-4. Sound natural, professional, and conversational.
-5. Be 1-2 direct sentences max.
-
-Do not include any introductory remarks, metadata, or multiple choices. Return ONLY the question text itself.`;
-        
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ role: 'user', parts: [{ text: genAIPrompt }] }]
-          })
-        });
-        if (response.ok) {
-          const data = await response.json();
-          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (text) firstQuestion = text.trim();
-        }
-      } catch (err) {
-        console.error(`Error generating CV-aware question for ${moduleItem.title}, falling back:`, err);
-      }
+    try {
+      const firstQuestion = await generateAdaptiveStartQuestion(apiKey, moduleItem, cvText, profileName);
+      
+      const firstMsg = { role: 'model', parts: [{ text: firstQuestion }] };
+      setChatHistory([firstMsg]);
+      setAdaptiveQuestionCount(1);
+      setIsAdaptiveStepLoading(false);
+      speakText(firstQuestion);
+      
+      // Start listening
+      initSpeechRecognition();
+    } catch (err) {
+      console.error(`Failed to generate initial question for ${moduleItem.title}:`, err);
+      setIsAdaptiveStepLoading(false);
+      setStep(STEPS.DASHBOARD);
+      stopHardware();
+      setApiError(err.message || 'Failed to generate initial question. Please check your Gemini API key or network.');
+      setTimeout(() => setApiError(''), 8000);
     }
-
-    if (!firstQuestion) {
-      // Pick one primary question randomly from the questions list as a fallback
-      const questions = moduleItem.questions;
-      firstQuestion = questions[Math.floor(Math.random() * questions.length)];
-    }
-
-    const firstMsg = { role: 'model', parts: [{ text: firstQuestion }] };
-    setChatHistory([firstMsg]);
-    setAdaptiveQuestionCount(1);
-    setIsAdaptiveStepLoading(false);
-    speakText(firstQuestion);
-    
-    // Start listening
-    initSpeechRecognition();
   };
 
   const submitAdaptiveResponse = async () => {
@@ -1141,18 +1112,31 @@ Do not include any introductory remarks, metadata, or multiple choices. Return O
             executiveSummary: result.feedback.suggestedAnswer ? `Suggested response improvement: ${result.feedback.suggestedAnswer.substring(0, 150)}...` : "Adaptive prep feedback generated.",
             methodology: `Evaluated candidate performance on ${selectedAdaptiveModule.title} questions dynamically.`,
             keyFindings: result.feedback.strengths || ["Participated actively in the module."],
-            detailedFeedback: updatedHistory.filter(m => m.role === 'model').map((m, idx) => {
-              const u = updatedHistory.find((x, i) => i > updatedHistory.indexOf(m) && x.role === 'user');
-              return {
-                question: m.parts[0].text,
-                answer: u ? u.parts[0].text : "(No verbal response captured)",
-                whatWasFound: "Answer evaluated.",
-                whyItMatters: "Reflects communication poise.",
-                implications: "Adaptive prep practice.",
-                confidenceLevel: "High",
-                score: 75
-              };
-            }),
+            detailedFeedback: (() => {
+              const feedback = [];
+              for (let i = 0; i < updatedHistory.length; i++) {
+                const msg = updatedHistory[i];
+                if (msg.role === 'model') {
+                  let userMsgText = "(No verbal response captured)";
+                  for (let j = i + 1; j < updatedHistory.length; j++) {
+                    if (updatedHistory[j].role === 'user') {
+                      userMsgText = updatedHistory[j].parts?.[0]?.text || userMsgText;
+                      break;
+                    }
+                  }
+                  feedback.push({
+                    question: msg.parts[0].text,
+                    answer: userMsgText,
+                    whatWasFound: "Answer evaluated.",
+                    whyItMatters: "Reflects communication poise.",
+                    implications: "Adaptive prep practice.",
+                    confidenceLevel: "High",
+                    score: 75
+                  });
+                }
+              }
+              return feedback;
+            })(),
             insightsPatterns: "Active practice round.",
             recommendations: result.feedback.improvements || [],
             limitations: "Self-paced single-module simulation.",
@@ -1183,9 +1167,10 @@ Do not include any introductory remarks, metadata, or multiple choices. Return O
     } catch (err) {
       console.error("Error submitting adaptive response:", err);
       setIsAdaptiveStepLoading(false);
+      setApiError(err.message || 'Failed to submit adaptive response. Please check your Gemini API key or network.');
+      setTimeout(() => setApiError(''), 6000);
       setStep(STEPS.DASHBOARD);
       stopHardware();
-      setStep(STEPS.DASHBOARD);
     }
   };
 

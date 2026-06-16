@@ -5,9 +5,68 @@
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
 /**
+ * Shared helper for calling the Gemini API with retry and backoff.
+ * @param {string} apiKey 
+ * @param {string} prompt 
+ * @param {Object} [generationConfig] 
+ * @param {number} [maxRetries=3] 
+ * @returns {Promise<any>} Response JSON data
+ */
+async function callGeminiAPI(apiKey, prompt, generationConfig = {}, maxRetries = 3) {
+  let delay = 1000;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(`${BASE_URL}?key=${apiKey}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: prompt }]
+            }
+          ],
+          generationConfig: {
+            ...generationConfig
+          }
+        })
+      });
+
+      if (response.ok) {
+        return await response.json();
+      }
+
+      // Retry on 429 (rate limit) or 503 (service unavailable)
+      if ((response.status === 429 || response.status === 503) && attempt < maxRetries) {
+        console.warn(`Gemini API returned status ${response.status}. Retrying in ${delay}ms... (Attempt ${attempt + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        delay *= 2;
+        continue;
+      }
+
+      const errorData = await response.json().catch(() => ({}));
+      const msg = errorData.error?.message || `API returned status code ${response.status}`;
+      throw new Error(msg);
+
+    } catch (error) {
+      // Retry on network errors
+      if (error.name === 'TypeError' && attempt < maxRetries) {
+        console.warn(`Gemini API connection error: ${error.message}. Retrying in ${delay}ms... (Attempt ${attempt + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        delay *= 2;
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+/**
  * Checks if the provided Gemini API key is valid by making a simple request
  * @param {string} apiKey 
- * @returns {Promise<boolean>}
+ * @returns {Promise<Object>} { valid: boolean, error?: string }
  */
 export async function validateApiKey(apiKey) {
   if (!apiKey || apiKey.trim() === '') {
@@ -15,18 +74,13 @@ export async function validateApiKey(apiKey) {
   }
   
   try {
-    const response = await fetch(`${BASE_URL}?key=${apiKey}`, {
-      method: 'POST',
+    // Optimisation: use GET models.list to validate the API key without consuming generation quota
+    const listModelsUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+    const response = await fetch(listModelsUrl, {
+      method: 'GET',
       headers: {
         'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [{ text: 'Ping' }]
-          }
-        ]
-      })
+      }
     });
     
     if (response.ok) {
@@ -46,6 +100,7 @@ export async function validateApiKey(apiKey) {
  * Generates all 3 questions at the start of the interview
  * @param {string} apiKey 
  * @param {Object} profile - { name, role, details }
+ * @param {number} numQuestions
  * @returns {Promise<Array<string>>}
  */
 export async function generateQuestionsList(apiKey, profile, numQuestions = 3) {
@@ -67,31 +122,11 @@ You MUST respond with a valid JSON array of exactly ${numQuestions} strings repr
 ]`;
 
   try {
-    const response = await fetch(`${BASE_URL}?key=${apiKey}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: prompt }]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.8,
-          responseMimeType: 'application/json'
-        }
-      })
+    const data = await callGeminiAPI(apiKey, prompt, {
+      temperature: 0.8,
+      responseMimeType: 'application/json'
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error?.message || 'Failed to generate questions');
-    }
-
-    const data = await response.json();
     const jsonText = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!jsonText) throw new Error('Empty response from questions list API');
 
@@ -117,6 +152,8 @@ You MUST respond with a valid JSON array of exactly ${numQuestions} strings repr
       resultFallbacks = [fallbacks[0], fallbacks[1], fallbacks[6]];
     } else {
       resultFallbacks.push(fallbacks[0]);
+      // Note: If numQuestions > 7, this fallback loop will start repeating the generic placeholder question 
+      // since the 'fallbacks' array only contains 7 elements. This is fine as a defensive last resort.
       for (let i = 1; i < numQuestions - 1; i++) {
         resultFallbacks.push(fallbacks[i] || `Could you explain another key project or technical concept listed in your profile?`);
       }
@@ -181,31 +218,12 @@ Here is the complete interview transcript:
 ${JSON.stringify(chatHistory, null, 2)}`;
 
   try {
-    const response = await fetch(`${BASE_URL}?key=${apiKey}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: evaluationPrompt }]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.2,
-          responseMimeType: 'application/json'
-        }
-      })
+    const data = await callGeminiAPI(apiKey, evaluationPrompt, {
+      temperature: 0.2,
+      responseMimeType: 'application/json',
+      maxOutputTokens: 8192
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error?.message || 'Failed to generate report');
-    }
-
-    const data = await response.json();
     const jsonText = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!jsonText) throw new Error('Empty response from report API');
 
@@ -213,6 +231,29 @@ ${JSON.stringify(chatHistory, null, 2)}`;
   } catch (error) {
     console.error('Error generating feedback report:', error);
     // Return a fallback object matching the new expanded structure so the UI doesn't crash
+    const detailedFeedback = [];
+    for (let i = 0; i < chatHistory.length; i++) {
+      const msg = chatHistory[i];
+      if (msg.role === 'model') {
+        let userMsgText = "(No verbal response captured)";
+        for (let j = i + 1; j < chatHistory.length; j++) {
+          if (chatHistory[j].role === 'user') {
+            userMsgText = chatHistory[j].parts?.[0]?.text || userMsgText;
+            break;
+          }
+        }
+        detailedFeedback.push({
+          question: msg.parts?.[0]?.text || '',
+          answer: userMsgText,
+          whatWasFound: "Successfully recorded answer transcript.",
+          whyItMatters: "Every response reflects your core interview preparation progress.",
+          implications: "Manual review is recommended due to an automated parsing limit.",
+          confidenceLevel: "Medium - evaluated from raw text transcripts.",
+          score: 70
+        });
+      }
+    }
+
     return {
       overallScore: 70,
       metrics: {
@@ -228,20 +269,7 @@ ${JSON.stringify(chatHistory, null, 2)}`;
         "Communicated technical background",
         "API evaluation parsed with errors"
       ],
-      detailedFeedback: chatHistory
-        .filter(msg => msg.role === 'model')
-        .map((msg, i) => {
-          const userMsg = chatHistory.find((m, idx) => idx > chatHistory.indexOf(msg) && m.role === 'user');
-          return {
-            question: msg.parts[0].text,
-            answer: userMsg ? userMsg.parts[0].text : "(No verbal response captured)",
-            whatWasFound: "Successfully recorded answer transcript.",
-            whyItMatters: "Every response reflects your core interview preparation progress.",
-            implications: "Manual review is recommended due to an automated parsing limit.",
-            confidenceLevel: "Medium - evaluated from raw text transcripts.",
-            score: 70
-          };
-        }),
+      detailedFeedback,
       insightsPatterns: "The transcript shows active engagement, but automated sentiment and competence indicators failed to process due to a connection or formatting issue.",
       recommendations: [
         "Review your transcript text in the sidebar manually",
@@ -304,52 +332,74 @@ You MUST respond with a valid JSON object matching the following structure exact
 }`;
 
   try {
-    const response = await fetch(`${BASE_URL}?key=${apiKey}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: prompt }]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.8,
-          responseMimeType: 'application/json'
-        }
-      })
+    const data = await callGeminiAPI(apiKey, prompt, {
+      temperature: 0.8,
+      responseMimeType: 'application/json'
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error?.message || 'Failed to generate adaptive feedback');
-    }
-
-    const data = await response.json();
     const jsonText = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!jsonText) throw new Error('Empty response from adaptive feedback API');
 
     return JSON.parse(jsonText);
   } catch (error) {
     console.error('Error generating adaptive step feedback:', error);
-    return {
-      feedback: {
-        scores: {
-          communication: 7,
-          clarity: 7,
-          technicalDepth: 7,
-          confidence: 7
-        },
-        strengths: ["Expressed your thoughts actively during the practice turn."],
-        improvements: ["Review the audio transcript in the console to self-evaluate and structure your answers."],
-        suggestedAnswer: "Your original answer was captured. Try structuring it using the STAR method (Situation, Task, Action, Result) for better impact.",
-        riskAreas: ["Be prepared to explain your decisions and quantify your achievements."]
-      },
-      nextQuestion: null,
-      shouldEnd: true
-    };
+    // Propagate the error to be handled explicitly by the caller in the UI
+    throw error;
+  }
+}
+
+/**
+ * Generates the first question for an adaptive mock interview session
+ * @param {string} apiKey
+ * @param {Object} moduleItem
+ * @param {string} cvText
+ * @param {string} profileName
+ * @returns {Promise<string>}
+ */
+export async function generateAdaptiveStartQuestion(apiKey, moduleItem, cvText, profileName) {
+  const exampleAreas = moduleItem.questions ? moduleItem.questions.join('; ') : '';
+
+  const prompt = `You are a mock placement interviewer for a ${profileName} role.
+${cvText.trim() ? `Candidate's CV/Resume text:\n"${cvText}"` : 'No CV text was provided, so ask a general but role-appropriate question.'}
+
+We are starting a behavioral/technical mock interview practice module focused on: "${moduleItem.title}" (${moduleItem.desc}).
+${exampleAreas ? `Example areas/topics this module typically covers: ${exampleAreas}.` : ''}
+
+Generate exactly one customized starting question for this candidate. The question must:
+1. Directly relate to their CV details, projects, internships, leadership roles, or background if applicable.
+2. Be tailored to the ${profileName} context.
+3. If the module is personal (like Self Introduction, Strengths/Weaknesses, or Motivation), tie it to their background or their experiences at IIT Kharagpur if appropriate.
+4. Sound natural, professional, and conversational.
+5. Be 1-2 direct sentences max.
+
+Do not include any introductory remarks, metadata, or multiple choices. Return ONLY the question text itself.`;
+
+  try {
+    const data = await callGeminiAPI(apiKey, prompt, {
+      temperature: 0.8
+    });
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error('Empty response from Gemini');
+    return text.trim();
+  } catch (error) {
+    console.warn(`Failed to generate initial question with CV prompt, trying fallback simple prompt...`, error);
+    // Fallback simple prompt
+    const fallbackPrompt = `You are a mock placement interviewer for a ${profileName} role.
+We are starting a behavioral/technical mock interview practice module focused on: "${moduleItem.title}" (${moduleItem.desc}).
+${exampleAreas ? `Example areas/topics this module typically covers: ${exampleAreas}.` : ''}
+
+Generate exactly one starting question for this module. The question must:
+1. Be tailored to the ${profileName} context.
+2. Sound natural, professional, and conversational.
+3. Be 1-2 direct sentences max.
+
+Do not include any introductory remarks, metadata, or multiple choices. Return ONLY the question text itself.`;
+
+    const data = await callGeminiAPI(apiKey, fallbackPrompt, {
+      temperature: 0.8
+    });
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error('Empty response from fallback Gemini call');
+    return text.trim();
   }
 }
