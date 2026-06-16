@@ -171,7 +171,7 @@ const BEHAVIORAL_MODULES = [
   }
 ];
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://ai-interview-prep-backend-beryl.vercel.app";
 
 // Helper function for sending authenticated backend requests
 async function apiRequest(url, method = 'GET', body = null, token = null) {
